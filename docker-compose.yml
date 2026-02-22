@@ -1,0 +1,119 @@
+services:
+  # ==========================================================================
+  # CAP - Proof-of-Work CAPTCHA
+  # ==========================================================================
+  cap:
+    image: tiago2/cap:latest
+    expose:
+      - "3000"
+    environment:
+      - ADMIN_KEY=${CAP_ADMIN_KEY}
+      - CORS_ORIGIN=*
+      - ENABLE_ASSETS_SERVER=true
+    volumes:
+      - cap_data:/data
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ==========================================================================
+  # Caddy - Reverse Proxy with Rate Limiting
+  # ==========================================================================
+  caddy:
+    build: ./caddy
+    ports:
+      - "${ACCOUNTS_PORT:-5377}:5377"
+      - "${SYNC_PORT:-5379}:5379"
+    depends_on:
+      accounts:
+        condition: service_healthy
+      sync:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:2019/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ==========================================================================
+  # Databases
+  # ==========================================================================
+  accounts-db:
+    image: postgres:18-alpine
+    environment:
+      - POSTGRES_USER=${ACCOUNTS_DB_USER:-accounts}
+      - POSTGRES_PASSWORD=${ACCOUNTS_DB_PASSWORD:-accounts}
+      - POSTGRES_DB=${ACCOUNTS_DB_NAME:-accounts}
+      - PGDATA=/var/lib/postgresql/data
+    volumes:
+      - accounts_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ACCOUNTS_DB_USER:-accounts} -d ${ACCOUNTS_DB_NAME:-accounts}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  accounts:
+    image: ghcr.io/betterbasehq/betterbase-accounts:latest
+    expose:
+      - "5377"
+    environment:
+      - OPAQUE_SERVER_SETUP=${OPAQUE_SERVER_SETUP}
+      - OAUTH_ISSUER=${OAUTH_ISSUER:-https://accounts.betterbase.dev}
+      - DATABASE_URL=postgres://${ACCOUNTS_DB_USER:-accounts}:${ACCOUNTS_DB_PASSWORD:-accounts}@accounts-db:5432/${ACCOUNTS_DB_NAME:-accounts}?sslmode=disable
+      - CAP_VERIFY_URL=http://cap:3000
+      - CAP_KEY_ID=${CAP_KEY_ID}
+      - CAP_SECRET=${CAP_SECRET}
+      - IDENTITY_HASH_KEY=${IDENTITY_HASH_KEY}
+      - SYNC_ENDPOINT=${SYNC_ENDPOINT:-http://sync:5379/api/v1}
+    depends_on:
+      accounts-db:
+        condition: service_healthy
+      cap:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5377/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  sync-db:
+    image: postgres:18-alpine
+    environment:
+      - POSTGRES_USER=${SYNC_DB_USER:-sync}
+      - POSTGRES_PASSWORD=${SYNC_DB_PASSWORD:-sync}
+      - POSTGRES_DB=${SYNC_DB_NAME:-sync}
+      - PGDATA=/var/lib/postgresql/data
+    volumes:
+      - sync_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SYNC_DB_USER:-sync} -d ${SYNC_DB_NAME:-sync}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  sync:
+    image: ghcr.io/betterbasehq/betterbase-sync:latest
+    expose:
+      - "5379"
+    environment:
+      - DATABASE_URL=postgres://${SYNC_DB_USER:-sync}:${SYNC_DB_PASSWORD:-sync}@sync-db:5432/${SYNC_DB_NAME:-sync}?sslmode=disable
+      - TRUSTED_ISSUERS=${OAUTH_ISSUER:-https://accounts.betterbase.dev}=http://accounts:5377/.well-known/jwks.json
+      - AUDIENCES=betterbase-sync
+    depends_on:
+      accounts:
+        condition: service_healthy
+      sync-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5379/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  cap_data:
+  accounts_db_data:
+  sync_db_data:

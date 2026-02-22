@@ -1,0 +1,390 @@
+# Betterbase - Caddy Configuration with Rate Limiting
+#
+# This configuration provides rate limiting for abuse protection.
+# See betterbase-accounts/docs/RATE-LIMITING.md and betterbase-sync/docs/RATE-LIMITING.md
+# for detailed threat models and rationale.
+#
+# Rate limit tiers (sliding window - allows natural bursting within window):
+#   - Strict:   60/min   - Login, registration, recovery
+#   - Moderate: 120/min  - Verification, OAuth
+#   - Standard: 300/min  - Authenticated API calls
+#   - Relaxed:  1000/min - Health checks, public keys, static assets
+#
+# Philosophy: IP-based limits are a last resort for shared IPs (offices, universities).
+# Application-level user/email limits provide primary protection.
+#
+# Deployment notes:
+#   - If behind a CDN/load balancer, configure trusted_proxies below
+#   - For Cloudflare: use {http.request.header.CF-Connecting-IP}
+#   - For AWS ALB: use {http.request.header.X-Forwarded-For}
+
+{
+	# Enable rate limiting before other middleware
+	order rate_limit before basicauth
+
+	# Admin API for health checks (not proxied to backends)
+	admin :2019
+}
+
+# ==============================================================================
+# Caddy Health Endpoint (dedicated, not proxied)
+# ==============================================================================
+
+:2019 {
+	respond /health 200
+}
+
+# ==============================================================================
+# betterbase-accounts (Authentication Service)
+# ==============================================================================
+
+:5377 {
+	# -------------------------------------------------------------------------
+	# CLIENT IP DETECTION
+	# Uncomment the appropriate line for your deployment:
+	# -------------------------------------------------------------------------
+	# Direct exposure (no proxy):
+	vars client_ip {remote_host}
+	# Behind Cloudflare:
+	# vars client_ip {http.request.header.CF-Connecting-IP}
+	# Behind AWS ALB / generic proxy:
+	# vars client_ip {http.request.header.X-Forwarded-For}
+
+	# -------------------------------------------------------------------------
+	# GLOBAL RATE LIMIT (600/min per IP)
+	# Backstop to prevent distributed endpoint attacks
+	# -------------------------------------------------------------------------
+	rate_limit {
+		zone accounts_global {
+			key {vars.client_ip}
+			events 600
+			window 1m
+		}
+	}
+
+	# -------------------------------------------------------------------------
+	# CAP ASSETS (Proof-of-Work CAPTCHA)
+	# Serves CAP client scripts and handles token verification
+	# -------------------------------------------------------------------------
+	@cap_assets path /cap/*
+	handle @cap_assets {
+		rate_limit {
+			zone accounts_cap {
+				key {vars.client_ip}
+				events 300
+				window 1m
+			}
+		}
+		uri strip_prefix /cap
+		reverse_proxy cap:3000
+	}
+
+	# -------------------------------------------------------------------------
+	# CORS PREFLIGHT (300/min per IP, burst 500)
+	# Must not block browser preflight requests
+	# -------------------------------------------------------------------------
+	@cors_preflight method OPTIONS
+	handle @cors_preflight {
+		rate_limit {
+			zone accounts_cors {
+				key {vars.client_ip}
+				events 300
+				window 1m
+			}
+		}
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+		header Access-Control-Allow-Headers "Authorization, Content-Type"
+		header Access-Control-Max-Age "86400"
+		respond 204
+	}
+
+	# -------------------------------------------------------------------------
+	# STRICT TIER (60/min per IP, burst 120)
+	# High-value attack targets: login, registration, recovery
+	# -------------------------------------------------------------------------
+	@accounts_strict {
+		path /v1/auth/login/init
+		path /v1/auth/login/finalize
+		path /v1/accounts/password/init
+		path /v1/accounts/password/finalize
+		path /v1/accounts/recover/init
+		path /v1/accounts/recover/finalize
+	}
+	handle @accounts_strict {
+		rate_limit {
+			zone accounts_strict {
+				key {vars.client_ip}
+				events 60
+				window 1m
+			}
+		}
+		reverse_proxy accounts:5377
+	}
+
+	# Account deletion - strict even though authenticated
+	@accounts_delete {
+		path /v1/accounts
+		method DELETE
+	}
+	handle @accounts_delete {
+		rate_limit {
+			zone accounts_delete {
+				key {vars.client_ip}
+				events 60
+				window 1m
+			}
+		}
+		reverse_proxy accounts:5377
+	}
+
+	# -------------------------------------------------------------------------
+	# MODERATE TIER (120/min per IP, burst 240)
+	# Verification, OAuth authorize/token
+	# -------------------------------------------------------------------------
+	@accounts_moderate {
+		path /v1/accounts/verify/*
+		path /v1/accounts/recovery-blob/fetch
+		path /oauth/authorize
+		path /oauth/token
+	}
+	handle @accounts_moderate {
+		rate_limit {
+			zone accounts_moderate {
+				key {vars.client_ip}
+				events 120
+				window 1m
+			}
+		}
+		reverse_proxy accounts:5377
+	}
+
+	# -------------------------------------------------------------------------
+	# STANDARD TIER (300/min per IP, burst 600)
+	# Authenticated endpoints
+	# -------------------------------------------------------------------------
+	@accounts_standard {
+		path /v1/auth/validate
+		path /v1/keys
+		path /v1/keys/*
+		path /v1/accounts/recovery-blob
+		path /oauth/consent
+		path /oauth/userinfo
+		path /v1/users/by-thumbprint/*
+		path /v1/users/*/keys/*
+	}
+	handle @accounts_standard {
+		rate_limit {
+			zone accounts_standard {
+				key {vars.client_ip}
+				events 300
+				window 1m
+			}
+		}
+		reverse_proxy accounts:5377
+	}
+
+	# -------------------------------------------------------------------------
+	# RELAXED TIER (1000/min per IP, burst 2000)
+	# Health, JWKS, static assets
+	# -------------------------------------------------------------------------
+	@accounts_relaxed {
+		path /health
+		path /.well-known/jwks.json
+	}
+	handle @accounts_relaxed {
+		rate_limit {
+			zone accounts_relaxed {
+				key {vars.client_ip}
+				events 1000
+				window 1m
+			}
+		}
+		reverse_proxy accounts:5377
+	}
+
+	# Default handler for web UI and unmatched routes
+	handle {
+		rate_limit {
+			zone accounts_default {
+				key {vars.client_ip}
+				events 1000
+				window 1m
+			}
+		}
+		reverse_proxy accounts:5377
+	}
+}
+
+# ==============================================================================
+# betterbase-sync (Synchronization Service)
+# ==============================================================================
+
+:5379 {
+	# -------------------------------------------------------------------------
+	# CLIENT IP DETECTION
+	# -------------------------------------------------------------------------
+	vars client_ip {remote_host}
+	# vars client_ip {http.request.header.CF-Connecting-IP}
+	# vars client_ip {http.request.header.X-Forwarded-For}
+
+	# -------------------------------------------------------------------------
+	# GLOBAL RATE LIMIT (600/min per IP)
+	# -------------------------------------------------------------------------
+	rate_limit {
+		zone sync_global {
+			key {vars.client_ip}
+			events 600
+			window 1m
+		}
+	}
+
+	# -------------------------------------------------------------------------
+	# CORS PREFLIGHT (300/min per IP)
+	# -------------------------------------------------------------------------
+	@cors_preflight method OPTIONS
+	handle @cors_preflight {
+		rate_limit {
+			zone sync_cors {
+				key {vars.client_ip}
+				events 300
+				window 1m
+			}
+		}
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+		header Access-Control-Allow-Headers "Authorization, Content-Type"
+		header Access-Control-Max-Age "86400"
+		respond 204
+	}
+
+	# -------------------------------------------------------------------------
+	# HEALTH CHECK (300/min per IP)
+	# Only unauthenticated endpoint - protect against DDoS
+	# -------------------------------------------------------------------------
+	@sync_health path /health
+	handle @sync_health {
+		rate_limit {
+			zone sync_health {
+				key {vars.client_ip}
+				events 300
+				window 1m
+			}
+		}
+		reverse_proxy sync:5379
+	}
+
+	# -------------------------------------------------------------------------
+	# EVENTS (120/min per IP)
+	# Long-lived connections - application enforces per-user limits
+	# -------------------------------------------------------------------------
+	@sync_events {
+		path /api/v1/events
+		method POST
+	}
+	handle @sync_events {
+		rate_limit {
+			zone sync_events {
+				key {vars.client_ip}
+				events 120
+				window 1m
+			}
+		}
+		reverse_proxy sync:5379 {
+			# Long-lived connection settings
+			flush_interval -1
+			transport http {
+				read_timeout 24h
+				write_timeout 30s
+			}
+		}
+	}
+
+	# -------------------------------------------------------------------------
+	# SYNC PUSH (300/min per IP)
+	# Write operations (POST /api/v1/spaces/{spaceID}/push)
+	# -------------------------------------------------------------------------
+	@sync_push {
+		path_regexp /api/v1/spaces/[^/]+/push
+		method POST
+	}
+	handle @sync_push {
+		rate_limit {
+			zone sync_push {
+				key {vars.client_ip}
+				events 300
+				window 1m
+			}
+		}
+		reverse_proxy sync:5379
+	}
+
+	# -------------------------------------------------------------------------
+	# SYNC PULL (1000/min per IP)
+	# Read operations (POST /api/v1/pull)
+	# -------------------------------------------------------------------------
+	@sync_pull {
+		path /api/v1/pull
+		method POST
+	}
+	handle @sync_pull {
+		rate_limit {
+			zone sync_pull {
+				key {vars.client_ip}
+				events 1000
+				window 1m
+			}
+		}
+		reverse_proxy sync:5379
+	}
+
+	# -------------------------------------------------------------------------
+	# FILE UPLOAD (600/min per IP)
+	# Write operations (PUT /api/v1/spaces/{spaceID}/files/{hash})
+	# -------------------------------------------------------------------------
+	@file_upload {
+		path_regexp /api/v1/spaces/[^/]+/files/[^/]+
+		method PUT
+	}
+	handle @file_upload {
+		rate_limit {
+			zone file_upload {
+				key {vars.client_ip}
+				events 600
+				window 1m
+			}
+		}
+		reverse_proxy sync:5379
+	}
+
+	# -------------------------------------------------------------------------
+	# FILE DOWNLOAD/CHECK (2000/min per IP)
+	# Read operations (GET/HEAD /api/v1/spaces/{spaceID}/files/{hash})
+	# -------------------------------------------------------------------------
+	@file_read {
+		path_regexp /api/v1/spaces/[^/]+/files/[^/]+
+		method GET HEAD
+	}
+	handle @file_read {
+		rate_limit {
+			zone file_read {
+				key {vars.client_ip}
+				events 2000
+				window 1m
+			}
+		}
+		reverse_proxy sync:5379
+	}
+
+	# Default handler for /api/v1/* and unmatched routes
+	handle {
+		rate_limit {
+			zone sync_default {
+				key {vars.client_ip}
+				events 600
+				window 1m
+			}
+		}
+		reverse_proxy sync:5379
+	}
+}
