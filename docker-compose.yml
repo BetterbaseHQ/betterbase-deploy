@@ -61,7 +61,7 @@ services:
       - "5377"
     environment:
       - OPAQUE_SERVER_SETUP=${OPAQUE_SERVER_SETUP}
-      - OAUTH_ISSUER=${OAUTH_ISSUER:-https://accounts.betterbase.dev}
+      - OAUTH_ISSUER=${OAUTH_ISSUER:-http://localhost:5377}
       - DATABASE_URL=postgres://${ACCOUNTS_DB_USER:-accounts}:${ACCOUNTS_DB_PASSWORD:-accounts}@accounts-db:5432/${ACCOUNTS_DB_NAME:-accounts}?sslmode=disable
       - CAP_VERIFY_URL=http://cap:3000
       - CAP_KEY_ID=${CAP_KEY_ID}
@@ -74,7 +74,7 @@ services:
       cap:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5377/health"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5377/health"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -100,7 +100,7 @@ services:
       - "5379"
     environment:
       - DATABASE_URL=postgres://${SYNC_DB_USER:-sync}:${SYNC_DB_PASSWORD:-sync}@sync-db:5432/${SYNC_DB_NAME:-sync}?sslmode=disable
-      - TRUSTED_ISSUERS=${OAUTH_ISSUER:-https://accounts.betterbase.dev}=http://accounts:5377/.well-known/jwks.json
+      - TRUSTED_ISSUERS=${OAUTH_ISSUER:-http://localhost:5377}=http://accounts:5377/.well-known/jwks.json
       - AUDIENCES=betterbase-sync
     depends_on:
       accounts:
@@ -108,7 +108,7 @@ services:
       sync-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5379/health"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5379/health"]
       interval: 5s
       timeout: 3s
       retries: 5
