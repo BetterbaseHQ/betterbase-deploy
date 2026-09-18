@@ -9,17 +9,17 @@ Production deployment for Betterbase using Docker Compose.
 git clone https://github.com/BetterbaseHQ/betterbase-deploy.git
 cd betterbase-deploy
 
-# 2. Run setup (generates .env with random keys)
+# 2. Run setup (generates .env, OPAQUE keys, and provisions CAP)
 chmod +x setup.sh
 ./setup.sh
 
-# 3. Configure OPAQUE keys
-docker run --rm ghcr.io/betterbasehq/betterbase-accounts keygen >> .env
+# For a production domain:
+./setup.sh --domain yourdomain.com
 
-# 4. Start services
+# 3. Start services
 docker compose up -d
 
-# 5. Check health
+# 4. Check health
 docker compose ps
 ```
 
@@ -31,6 +31,7 @@ docker compose ps
 | Accounts | (internal) | OPAQUE auth + OAuth 2.0 |
 | Sync | (internal) | Encrypted blob sync |
 | CAP | (internal) | Proof-of-work CAPTCHA |
+| Valkey | (internal) | Redis-compatible backing store for CAP |
 | PostgreSQL | (internal) | Databases for accounts and sync |
 
 ## Configuration
