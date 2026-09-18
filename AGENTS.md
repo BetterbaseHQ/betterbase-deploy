@@ -39,6 +39,7 @@ docker compose down     # Stop (add -v to wipe data volumes)
 - Keep `docker-compose.yml` service definitions in sync with the production base in `betterbase-dev/docker-compose.yml` — especially the CAP digest pin, healthchecks (accounts/sync use `curl`, caddy uses busybox `wget`), and env var names, which must match what the services actually read (see each service repo's `AGENTS.md`).
 - The Caddyfile is mirrored from `betterbase-dev/caddy/Caddyfile`; rate-limit tiers are documented there and in each service's `docs/RATE-LIMITING.md`.
 - Image tags: our own GHCR images track `:latest`; third-party images with floating tags must be digest-pinned.
+- Service images are published for `linux/amd64` and `linux/arm64`; on Apple Silicon run `--platform linux/arm64` explicitly if you see the amd64-emulation warning (stale local images predate the multi-arch builds).
 
 ## Verification
 
