@@ -7,6 +7,7 @@ services:
     # silent update is what introduced the Redis requirement. Bump
     # deliberately after checking https://github.com/tiagozip/cap releases.
     image: tiago2/cap@sha256:c29417b6270d1fddc6a0603c08d972f89a12de81889d09c3f97a0915422fba5e
+    restart: unless-stopped
     expose:
       - "3000"
     environment:
@@ -28,6 +29,7 @@ services:
   # Valkey (Redis-compatible) backing store for CAP
   valkey:
     image: valkey/valkey:9-alpine
+    restart: unless-stopped
     command: valkey-server --save 60 1 --loglevel warning --maxmemory-policy noeviction
     volumes:
       - valkey_data:/data
@@ -42,6 +44,7 @@ services:
   # ==========================================================================
   caddy:
     build: ./caddy
+    restart: unless-stopped
     ports:
       - "${ACCOUNTS_PORT:-5377}:5377"
       - "${SYNC_PORT:-5379}:5379"
@@ -61,6 +64,7 @@ services:
   # ==========================================================================
   accounts-db:
     image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=${ACCOUNTS_DB_USER:-accounts}
       - POSTGRES_PASSWORD=${ACCOUNTS_DB_PASSWORD:-accounts}
@@ -76,6 +80,7 @@ services:
 
   accounts:
     image: ghcr.io/betterbasehq/betterbase-accounts:latest
+    restart: unless-stopped
     expose:
       - "5377"
     environment:
@@ -87,6 +92,12 @@ services:
       - CAP_SECRET=${CAP_SECRET}
       - IDENTITY_HASH_KEY=${IDENTITY_HASH_KEY}
       - SYNC_ENDPOINT=${SYNC_ENDPOINT:-http://sync:5379/api/v1}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_DEV_MODE=${SMTP_DEV_MODE:-}
     depends_on:
       accounts-db:
         condition: service_healthy
@@ -100,6 +111,7 @@ services:
 
   sync-db:
     image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=${SYNC_DB_USER:-sync}
       - POSTGRES_PASSWORD=${SYNC_DB_PASSWORD:-sync}
@@ -115,12 +127,14 @@ services:
 
   sync:
     image: ghcr.io/betterbasehq/betterbase-sync:latest
+    restart: unless-stopped
     expose:
       - "5379"
     environment:
       - DATABASE_URL=postgres://${SYNC_DB_USER:-sync}:${SYNC_DB_PASSWORD:-sync}@sync-db:5432/${SYNC_DB_NAME:-sync}?sslmode=disable
       - TRUSTED_ISSUERS=${OAUTH_ISSUER:-http://localhost:5377}=http://accounts:5377/.well-known/jwks.json
       - AUDIENCES=betterbase-sync
+      - IDENTITY_HASH_KEY=${IDENTITY_HASH_KEY}
     depends_on:
       accounts:
         condition: service_healthy

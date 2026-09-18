@@ -6,6 +6,7 @@ DOMAIN=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --domain)
+            [[ $# -ge 2 ]] || { echo "Error: --domain requires a value"; exit 1; }
             DOMAIN="$2"
             shift 2
             ;;
@@ -53,19 +54,25 @@ sed_inplace() {
 if [ ! -f .env ]; then
     echo "Creating .env from .env.example..."
     cp .env.example .env
-    chmod 600 .env
 
     # Generate random keys
     IDENTITY_HASH_KEY=$(openssl rand -hex 32)
     CAP_ADMIN_KEY=$(openssl rand -hex 32)
+    ACCOUNTS_DB_PASSWORD=$(openssl rand -hex 16)
+    SYNC_DB_PASSWORD=$(openssl rand -hex 16)
 
     sed_inplace "s/^IDENTITY_HASH_KEY=$/IDENTITY_HASH_KEY=$IDENTITY_HASH_KEY/" .env
     sed_inplace "s/^CAP_ADMIN_KEY=$/CAP_ADMIN_KEY=$CAP_ADMIN_KEY/" .env
+    sed_inplace "s/^# ACCOUNTS_DB_PASSWORD=.*$/ACCOUNTS_DB_PASSWORD=$ACCOUNTS_DB_PASSWORD/" .env
+    sed_inplace "s/^# SYNC_DB_PASSWORD=.*$/SYNC_DB_PASSWORD=$SYNC_DB_PASSWORD/" .env
 
-    echo "Generated IDENTITY_HASH_KEY and CAP_ADMIN_KEY."
+    echo "Generated IDENTITY_HASH_KEY, CAP_ADMIN_KEY, and database passwords."
 else
     echo ".env already exists, skipping generation."
 fi
+
+# Secrets are appended below; never leave a pre-existing .env world-readable
+chmod 600 .env
 
 # Apply --domain if provided
 if [ -n "$DOMAIN" ]; then
@@ -91,10 +98,18 @@ set +a
 if [ -z "${OPAQUE_SERVER_SETUP:-}" ]; then
     echo ""
     echo "Generating OPAQUE server keys..."
-    OPAQUE_SERVER_SETUP=$(docker run --rm --entrypoint /app/keygen ghcr.io/betterbasehq/betterbase-accounts:latest 2>/dev/null)
+    # Digest-pinned to the multi-arch manifest of betterbase-accounts v0.1.2:
+    # this image generates the deployment's long-term trust root, so bump the
+    # pin deliberately with each accounts release.
+    KEYGEN_IMAGE="ghcr.io/betterbasehq/betterbase-accounts@sha256:38e0871c231793e74be806853c03fb25592fab27f9ee721e03490cbaf5330fe7"
+
+    if ! OPAQUE_SERVER_SETUP=$(docker run --rm --entrypoint /app/keygen "$KEYGEN_IMAGE"); then
+        echo "Error: OPAQUE keygen failed. Check Docker image availability." >&2
+        exit 1
+    fi
 
     if [ -z "$OPAQUE_SERVER_SETUP" ]; then
-        echo "Error: OPAQUE keygen produced no output. Check Docker image availability."
+        echo "Error: OPAQUE keygen produced no output." >&2
         exit 1
     fi
 
@@ -129,54 +144,71 @@ if [ -z "${CAP_KEY_ID:-}" ] || [ -z "${CAP_SECRET:-}" ]; then
 
     echo "CAP service is ready."
 
+    # Stop CAP (and valkey) on any exit — success or failure — so a failed
+    # provisioning never leaves a live admin session behind
+    trap 'docker compose stop cap valkey >/dev/null 2>&1 || true' EXIT
+
     # We need curl inside the network — use the accounts image since it has curl
     echo "Pulling accounts image for network access..."
-    docker compose pull accounts >/dev/null 2>&1
+    docker compose pull accounts
 
     cap_curl() {
         docker compose run --rm --no-deps -T --entrypoint curl accounts \
             -sf --connect-timeout 5 --max-time 10 "$@"
     }
 
-    # Login to CAP admin API
+    # Login to CAP admin API. The request body is piped via stdin so the
+    # admin key never appears in a process listing.
     echo "Authenticating with CAP..."
-    login_response=$(cap_curl -X POST http://cap:3000/auth/login \
-        -H "Content-Type: application/json" \
-        -d "$(jq -n --arg k "$CAP_ADMIN_KEY" '{"admin_key":$k}')")
+    login_response=$(jq -n --arg k "$CAP_ADMIN_KEY" '{"admin_key":$k}' \
+        | cap_curl -X POST http://cap:3000/auth/login \
+            -H "Content-Type: application/json" \
+            -d @-) \
+        || { echo "Error: CAP login request failed (check CAP_ADMIN_KEY)." >&2; exit 1; }
 
     session_token=$(echo "$login_response" | jq -r '.session_token')
     hashed_token=$(echo "$login_response" | jq -r '.hashed_token')
 
     if [ "$session_token" = "null" ] || [ -z "$session_token" ]; then
-        echo "Error: Failed to authenticate with CAP."
-        docker compose stop cap
+        echo "Error: Failed to authenticate with CAP." >&2
         exit 1
     fi
 
     if [ "$hashed_token" = "null" ] || [ -z "$hashed_token" ]; then
-        echo "Error: CAP login response missing hashed_token."
-        docker compose stop cap
+        echo "Error: CAP login response missing hashed_token." >&2
         exit 1
     fi
 
-    # Create bearer auth token (base64 encoded JSON)
+    # Create bearer auth token (base64 encoded JSON). The header goes through
+    # a root-only temp file so the session token never appears in argv.
     auth_token=$(jq -n --arg t "$session_token" --arg h "$hashed_token" '{"token":$t,"hash":$h}' | base64 | tr -d '\n')
+    header_file=$(mktemp)
+    chmod 600 "$header_file"
+    printf 'Authorization: Bearer %s\n' "$auth_token" > "$header_file"
 
-    # Create site key
+    # Create site key. curl runs inside the accounts container, so the header
+    # file has to be mounted in rather than referenced from the host.
     echo "Creating CAP site key..."
-    key_response=$(cap_curl -X POST http://cap:3000/server/keys \
-        -H "Authorization: Bearer $auth_token" \
+    key_response=$(docker compose run --rm --no-deps -T \
+        --entrypoint curl -v "$header_file:/tmp/auth_header:ro" accounts \
+        -sf --connect-timeout 5 --max-time 10 -X POST http://cap:3000/server/keys \
+        -H "@/tmp/auth_header" \
         -H "Content-Type: application/json" \
-        -d '{"name":"betterbase-accounts"}')
+        -d '{"name":"betterbase-accounts"}') \
+        || { echo "Error: CAP site key request failed." >&2; rm -f "$header_file"; exit 1; }
+    rm -f "$header_file"
 
     CAP_KEY_ID=$(echo "$key_response" | jq -r '.siteKey')
     CAP_SECRET=$(echo "$key_response" | jq -r '.secretKey')
 
-    if [ "$CAP_KEY_ID" = "null" ] || [ -z "$CAP_KEY_ID" ]; then
-        echo "Error: Failed to create CAP site key."
-        docker compose stop cap
-        exit 1
-    fi
+    # CAP is a third-party image; treat its API output as untrusted since
+    # these values are written to .env, which is `source`d below.
+    for value in "$CAP_KEY_ID" "$CAP_SECRET"; do
+        if [[ ! "$value" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            echo "Error: CAP returned an unexpected key format; refusing to save." >&2
+            exit 1
+        fi
+    done
 
     sed_inplace "/^CAP_KEY_ID=$/d" .env
     sed_inplace "/^CAP_SECRET=$/d" .env
@@ -184,9 +216,6 @@ if [ -z "${CAP_KEY_ID:-}" ] || [ -z "${CAP_SECRET:-}" ]; then
     printf 'CAP_SECRET=%s\n' "$CAP_SECRET" >> .env
 
     echo "CAP site key created."
-
-    # Stop CAP (will be started with full stack)
-    docker compose stop cap
 else
     echo "CAP credentials already configured."
 fi
