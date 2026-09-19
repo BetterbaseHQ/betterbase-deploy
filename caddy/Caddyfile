@@ -24,6 +24,10 @@
 
 	# Admin API for health checks (not proxied to backends)
 	admin :2019
+
+	# Contact email for ACME accounts (Let's Encrypt expiry notices).
+	# Only used when the site addresses below are real hostnames.
+	email {$ACME_EMAIL:admin@localhost}
 }
 
 # ==============================================================================
@@ -37,8 +41,11 @@
 # ==============================================================================
 # betterbase-accounts (Authentication Service)
 # ==============================================================================
-
-:5377 {
+# Site address comes from the environment (see docker-compose.yml):
+#   unset / ":5377"  -> localhost mode: plain HTTP on port 5377
+#   "accounts.d.tld" -> production mode: automatic HTTPS on 443 (ACME/Let's
+#                       Encrypt) with HTTP->HTTPS redirect on port 80
+{$ACCOUNTS_SITE::5377} {
 	# -------------------------------------------------------------------------
 	# CLIENT IP DETECTION
 	# Uncomment the appropriate line for your deployment:
@@ -219,8 +226,9 @@
 # ==============================================================================
 # betterbase-sync (Synchronization Service)
 # ==============================================================================
-
-:5379 {
+# Same env-driven site address as above: ":5379" for localhost HTTP,
+# "sync.d.tld" for automatic HTTPS on 443.
+{$SYNC_SITE::5379} {
 	# -------------------------------------------------------------------------
 	# CLIENT IP DETECTION
 	# -------------------------------------------------------------------------

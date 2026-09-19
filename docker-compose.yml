@@ -45,9 +45,19 @@ services:
   caddy:
     build: ./caddy
     restart: unless-stopped
+    environment:
+      # Site addresses (see caddy/Caddyfile). Port defaults keep localhost
+      # HTTP; setup.sh --domain sets real hostnames for automatic TLS on 443.
+      # Never set these to empty strings - Caddy treats that as a parse error.
+      - ACCOUNTS_SITE=${ACCOUNTS_SITE:-:5377}
+      - SYNC_SITE=${SYNC_SITE:-:5379}
+      - ACME_EMAIL=${ACME_EMAIL:-admin@localhost}
     ports:
       - "${ACCOUNTS_PORT:-5377}:5377"
       - "${SYNC_PORT:-5379}:5379"
+      # TLS endpoints - nothing listens on these in localhost mode
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
     depends_on:
       accounts:
         condition: service_healthy

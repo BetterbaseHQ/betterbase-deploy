@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Parse arguments
 DOMAIN=""
+ACME_EMAIL=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --domain)
@@ -14,12 +15,26 @@ while [[ $# -gt 0 ]]; do
             DOMAIN="${1#*=}"
             shift
             ;;
+        --email)
+            [[ $# -ge 2 ]] || { echo "Error: --email requires a value"; exit 1; }
+            ACME_EMAIL="$2"
+            shift 2
+            ;;
+        --email=*)
+            ACME_EMAIL="${1#*=}"
+            shift
+            ;;
         -h|--help)
-            echo "Usage: ./setup.sh [--domain example.com]"
+            echo "Usage: ./setup.sh [--domain example.com] [--email you@example.com]"
             echo ""
             echo "Options:"
-            echo "  --domain    Production domain (sets up https://accounts.DOMAIN"
-            echo "              and https://sync.DOMAIN). Defaults to localhost."
+            echo "  --domain    Production domain. Serves https://accounts.DOMAIN and"
+            echo "              https://sync.DOMAIN with automatic Let's Encrypt TLS."
+            echo "              Requires DNS A records for both subdomains pointing at"
+            echo "              this server, and ports 80+443 reachable. Defaults to"
+            echo "              localhost (plain HTTP on ports 5377/5379)."
+            echo "  --email     Contact email for Let's Encrypt (expiry notices)."
+            echo "              Defaults to admin@DOMAIN when --domain is given."
             exit 0
             ;;
         *)
@@ -80,9 +95,23 @@ if [ -n "$DOMAIN" ]; then
         echo "Error: Invalid domain format: $DOMAIN"
         exit 1
     fi
+    if [ -z "$ACME_EMAIL" ]; then
+        ACME_EMAIL="admin@$DOMAIN"
+    fi
+    if [[ ! "$ACME_EMAIL" =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]]; then
+        echo "Error: Invalid email format: $ACME_EMAIL"
+        exit 1
+    fi
     echo "Configuring for domain: $DOMAIN"
     sed_inplace "s|^OAUTH_ISSUER=.*|OAUTH_ISSUER=https://accounts.$DOMAIN|" .env
     sed_inplace "s|^SYNC_ENDPOINT=.*|SYNC_ENDPOINT=https://sync.$DOMAIN/api/v1|" .env
+    # Site addresses select Caddy's TLS mode (see caddy/Caddyfile)
+    sed_inplace "/^ACCOUNTS_SITE=/d" .env
+    sed_inplace "/^SYNC_SITE=/d" .env
+    sed_inplace "/^ACME_EMAIL=/d" .env
+    printf 'ACCOUNTS_SITE=accounts.%s\n' "$DOMAIN" >> .env
+    printf 'SYNC_SITE=sync.%s\n' "$DOMAIN" >> .env
+    printf 'ACME_EMAIL=%s\n' "$ACME_EMAIL" >> .env
 fi
 
 # Source current .env values
@@ -237,8 +266,17 @@ echo "  OAUTH_ISSUER:  $OAUTH_ISSUER"
 echo "  SYNC_ENDPOINT: $SYNC_ENDPOINT"
 echo ""
 if [[ "$OAUTH_ISSUER" == *"localhost"* ]]; then
-    echo "  Using localhost defaults. For production, re-run with:"
+    echo "  Using localhost defaults (plain HTTP on ports ${ACCOUNTS_PORT:-5377}/${SYNC_PORT:-5379})."
+    echo "  For production, re-run with:"
     echo "    ./setup.sh --domain yourdomain.com"
+    echo ""
+else
+    echo "  TLS: Caddy will obtain Let's Encrypt certificates for"
+    echo "    ${ACCOUNTS_SITE:-accounts.$DOMAIN}"
+    echo "    ${SYNC_SITE:-sync.$DOMAIN}"
+    echo "  Before starting, make sure:"
+    echo "    - DNS A records for both subdomains point to this server"
+    echo "    - Ports 80 and 443 are reachable from the internet"
     echo ""
 fi
 echo "To start Betterbase:"

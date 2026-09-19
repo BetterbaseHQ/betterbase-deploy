@@ -27,7 +27,14 @@ jobs:
       - name: Validate Caddyfile
         run: |
           docker build -t caddy-check ./caddy
+          # Localhost mode (env unset -> port-form site addresses)
           docker run --rm caddy-check caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          # Domain mode (hostname site addresses -> automatic HTTPS on 443)
+          docker run --rm \
+            -e ACCOUNTS_SITE=accounts.example.com \
+            -e SYNC_SITE=sync.example.com \
+            -e ACME_EMAIL=admin@example.com \
+            caddy-check caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
   shellcheck:
     runs-on: ubuntu-latest
