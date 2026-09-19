@@ -30,7 +30,7 @@ docker compose down     # Stop (add -v to wipe data volumes)
 
 `setup.sh` is idempotent — it skips any credential already present in `.env`.
 
-The Caddyfile is baked into the image at build time: after editing `caddy/`, use `docker compose up -d --build` (plain `up -d` reuses the stale image silently).
+The Caddyfile is bind-mounted into the container (never baked into the image): after editing `caddy/Caddyfile`, apply with `docker compose restart caddy`. Rebuild only when the Caddy binary/plugins change.
 
 ## Configuration
 

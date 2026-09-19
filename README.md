@@ -49,9 +49,10 @@ it. Changing the domain later invalidates previously issued tokens.
 If you're behind Cloudflare or an AWS ALB, see the client-IP detection
 comments in `caddy/Caddyfile`.
 
-> **Note:** the Caddyfile is baked into the Caddy image. After pulling repo
-> updates, start with `docker compose up -d --build` so changes to
-> `caddy/Caddyfile` (or the Caddy build) are picked up.
+> **Note:** the Caddyfile is bind-mounted into the container, so edits to
+> `caddy/Caddyfile` take effect with `docker compose restart caddy` — no
+> image rebuild needed. If you customize it (e.g., enabling CDN client-IP
+> detection), keep your changes across `git pull`s like any local patch.
 
 ## Services
 

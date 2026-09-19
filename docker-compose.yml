@@ -58,6 +58,9 @@ services:
       # TLS endpoints - nothing listens on these in localhost mode
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
+    volumes:
+      # Config is mounted, not baked: edits apply after `docker compose restart caddy`
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
       accounts:
         condition: service_healthy

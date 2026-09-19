@@ -81,6 +81,11 @@ if [ ! -f .env ]; then
     sed_inplace "s/^# ACCOUNTS_DB_PASSWORD=.*$/ACCOUNTS_DB_PASSWORD=$ACCOUNTS_DB_PASSWORD/" .env
     sed_inplace "s/^# SYNC_DB_PASSWORD=.*$/SYNC_DB_PASSWORD=$SYNC_DB_PASSWORD/" .env
 
+    # Explicit site addresses (Caddy TLS mode; see caddy/Caddyfile) - keeps
+    # .env self-documenting. --domain rewrites these to real hostnames.
+    printf 'ACCOUNTS_SITE=:5377\n' >> .env
+    printf 'SYNC_SITE=:5379\n' >> .env
+
     echo "Generated IDENTITY_HASH_KEY, CAP_ADMIN_KEY, and database passwords."
 else
     echo ".env already exists, skipping generation."
