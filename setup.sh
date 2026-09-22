@@ -29,7 +29,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --domain    Production domain. Serves https://accounts.DOMAIN,"
-            echo "              https://sync.DOMAIN, and https://samples.DOMAIN with"
+            echo "              https://sync.DOMAIN, and https://examples.DOMAIN with"
             echo "              automatic Let's Encrypt TLS."
             echo "              Requires DNS A records for all three subdomains"
             echo "              pointing at this server, and ports 80+443 reachable."
@@ -87,7 +87,7 @@ if [ ! -f .env ]; then
     # .env self-documenting. --domain rewrites these to real hostnames.
     printf 'ACCOUNTS_SITE=:5377\n' >> .env
     printf 'SYNC_SITE=:5379\n' >> .env
-    printf 'SAMPLES_SITE=:5380\n' >> .env
+    printf 'EXAMPLES_SITE=:5380\n' >> .env
 
     echo "Generated IDENTITY_HASH_KEY, CAP_ADMIN_KEY, and database passwords."
 else
@@ -117,13 +117,13 @@ if [ -n "$DOMAIN" ]; then
     sed_inplace "/^ACCOUNTS_SITE=/d" .env
     sed_inplace "/^SYNC_SITE=/d" .env
     sed_inplace "/^ACME_EMAIL=/d" .env
-    sed_inplace "/^SAMPLES_SITE=/d" .env
-    sed_inplace "/^SAMPLES_ACCOUNTS_DOMAIN=/d" .env
+    sed_inplace "/^EXAMPLES_SITE=/d" .env
+    sed_inplace "/^EXAMPLES_ACCOUNTS_DOMAIN=/d" .env
     printf 'ACCOUNTS_SITE=accounts.%s\n' "$DOMAIN" >> .env
     printf 'SYNC_SITE=sync.%s\n' "$DOMAIN" >> .env
     printf 'ACME_EMAIL=%s\n' "$ACME_EMAIL" >> .env
-    printf 'SAMPLES_SITE=samples.%s\n' "$DOMAIN" >> .env
-    printf 'SAMPLES_ACCOUNTS_DOMAIN=accounts.%s\n' "$DOMAIN" >> .env
+    printf 'EXAMPLES_SITE=examples.%s\n' "$DOMAIN" >> .env
+    printf 'EXAMPLES_ACCOUNTS_DOMAIN=accounts.%s\n' "$DOMAIN" >> .env
 fi
 
 # Source current .env values
@@ -286,20 +286,20 @@ else
 fi
 
 # ==========================================================================
-# Step 4: Provision OAuth clients for the sample apps
+# Step 4: Provision OAuth clients for the example apps
 # ==========================================================================
 
-# The samples container serves launchpad at / and each app at /<app>/.
-SAMPLES_APPS="launchpad tasks notes photos board chat passwords"
+# The examples container serves launchpad at / and each app at /<app>/.
+EXAMPLES_APPS="launchpad tasks notes photos board chat passwords"
 
 # bash 3.2 (macOS) has no ${var^^}
 upper() {
     echo "$1" | tr '[:lower:]' '[:upper:]'
 }
 
-samples_clients_missing() {
+examples_clients_missing() {
     local app var
-    for app in $SAMPLES_APPS; do
+    for app in $EXAMPLES_APPS; do
         var="$(upper "$app")_CLIENT_ID"
         if [ -z "${!var:-}" ]; then
             return 0
@@ -308,9 +308,9 @@ samples_clients_missing() {
     return 1
 }
 
-if samples_clients_missing; then
+if examples_clients_missing; then
     echo ""
-    echo "Provisioning OAuth clients for the sample apps..."
+    echo "Provisioning OAuth clients for the example apps..."
 
     # Creating clients needs a live accounts service (which pulls in its DB
     # and CAP). Started here and stopped again at the end of this step, so
@@ -337,15 +337,15 @@ if samples_clients_missing; then
             | head -1
     }
 
-    # Public redirect base for the samples origin (follows SAMPLES_SITE,
+    # Public redirect base for the examples origin (follows EXAMPLES_SITE,
     # which --domain sets; ":5380" means localhost HTTP mode).
-    if [ -n "${SAMPLES_SITE:-}" ] && [[ "$SAMPLES_SITE" != :* ]]; then
-        REDIRECT_BASE="https://$SAMPLES_SITE"
+    if [ -n "${EXAMPLES_SITE:-}" ] && [[ "$EXAMPLES_SITE" != :* ]]; then
+        REDIRECT_BASE="https://$EXAMPLES_SITE"
     else
-        REDIRECT_BASE="http://localhost:${SAMPLES_PORT:-5380}"
+        REDIRECT_BASE="http://localhost:${EXAMPLES_PORT:-5380}"
     fi
 
-    for app in $SAMPLES_APPS; do
+    for app in $EXAMPLES_APPS; do
         var="$(upper "$app")_CLIENT_ID"
         if [ -n "${!var:-}" ]; then
             echo "  $app: client already configured."
@@ -415,9 +415,9 @@ if samples_clients_missing; then
     echo "Stopping provisioning services..."
     docker compose stop accounts accounts-db cap valkey >/dev/null 2>&1 || true
 
-    echo "Sample app OAuth clients configured."
+    echo "Example app OAuth clients configured."
 else
-    echo "Sample app OAuth clients already configured."
+    echo "Example app OAuth clients already configured."
 fi
 
 # ==========================================================================
@@ -437,7 +437,7 @@ echo "  OAUTH_ISSUER:  $OAUTH_ISSUER"
 echo "  SYNC_ENDPOINT: $SYNC_ENDPOINT"
 echo ""
 if [[ "$OAUTH_ISSUER" == *"localhost"* ]]; then
-    echo "  Using localhost defaults (plain HTTP on ports ${ACCOUNTS_PORT:-5377}/${SYNC_PORT:-5379}/${SAMPLES_PORT:-5380})."
+    echo "  Using localhost defaults (plain HTTP on ports ${ACCOUNTS_PORT:-5377}/${SYNC_PORT:-5379}/${EXAMPLES_PORT:-5380})."
     echo "  For production, re-run with:"
     echo "    ./setup.sh --domain yourdomain.com"
     echo ""
@@ -445,7 +445,7 @@ else
     echo "  TLS: Caddy will obtain Let's Encrypt certificates for"
     echo "    ${ACCOUNTS_SITE:-accounts.$DOMAIN}"
     echo "    ${SYNC_SITE:-sync.$DOMAIN}"
-    echo "    ${SAMPLES_SITE:-samples.$DOMAIN}"
+    echo "    ${EXAMPLES_SITE:-examples.$DOMAIN}"
     echo "  Before starting, make sure:"
     echo "    - DNS A records for all three subdomains point to this server"
     echo "    - Ports 80 and 443 are reachable from the internet"

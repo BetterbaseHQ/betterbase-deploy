@@ -28,16 +28,16 @@ docker compose ps
 Two modes, selected by `./setup.sh --domain`:
 
 **Localhost (default)** — Caddy serves plain HTTP on ports 5377 (accounts),
-5379 (sync), and 5380 (samples). No TLS, no DNS needed. Good for trying
+5379 (sync), and 5380 (examples). No TLS, no DNS needed. Good for trying
 things out.
 
 **Production (`--domain yourdomain.com`)** — Caddy serves
 `https://accounts.yourdomain.com`, `https://sync.yourdomain.com`, and
-`https://samples.yourdomain.com` on port 443 with automatically managed
+`https://examples.yourdomain.com` on port 443 with automatically managed
 Let's Encrypt certificates, and redirects HTTP (port 80) to HTTPS. Before
 starting:
 
-- Create DNS **A records** for `accounts.`, `sync.`, and `samples.`
+- Create DNS **A records** for `accounts.`, `sync.`, and `examples.`
   pointing to your server's public IP
 - Open ports **80 and 443** in your firewall (80 is required for certificate
   issuance/redirects)
@@ -63,27 +63,27 @@ comments in `caddy/Caddyfile`.
 | Caddy | 80, 443 (TLS mode) / 5377, 5379, 5380 (localhost mode) | Reverse proxy with rate limiting and automatic TLS |
 | Accounts | (internal) | OPAQUE auth + OAuth 2.0 |
 | Sync | (internal) | Encrypted blob sync |
-| Samples | (internal) | Hosted example apps (path-based: `/` launchpad, `/<app>/` apps) |
+| Examples | (internal) | Hosted example apps (path-based: `/` launchpad, `/<app>/` apps) |
 | CAP | (internal) | Proof-of-work CAPTCHA |
 | Valkey | (internal) | Redis-compatible backing store for CAP |
 | PostgreSQL | (internal) | Databases for accounts and sync |
 
-## Sample apps
+## Example apps
 
-The `samples` service serves the Betterbase example apps from a single
+The `examples` service serves the Betterbase example apps from a single
 container: the launchpad portal at `/` and each app (tasks, notes, photos,
 board, chat, passwords) at `/<app>/`. `setup.sh` registers an OAuth client
 for each app with matching redirect URIs and passes the client IDs to the
 container, which injects them at startup.
 
-Trim or reorder the hosted set with `ENABLED_APPS` in `.env` (space- or
+Trim or reorder the hosted set with `EXAMPLES_ENABLED_APPS` in `.env` (space- or
 comma-separated; the launchpad portal itself is always served):
 
 ```bash
-ENABLED_APPS=tasks,notes
+EXAMPLES_ENABLED_APPS=tasks,notes
 ```
 
-After changing it, recreate the container: `docker compose up -d samples`.
+After changing it, recreate the container: `docker compose up -d examples`.
 
 ## Configuration
 
@@ -93,8 +93,8 @@ Copy `.env.example` to `.env` and configure:
 - `OAUTH_ISSUER` — Public URL of your accounts server
 - `SYNC_ENDPOINT` — Public URL of your sync server API
 - `IDENTITY_HASH_KEY` — HMAC key for privacy-preserving identity hashing
-- `SAMPLES_*`, `<APP>_CLIENT_ID` — Sample apps hosting + OAuth clients (provisioned by `setup.sh`)
-- `ACCOUNTS_SITE` / `SYNC_SITE` / `SAMPLES_SITE` / `ACME_EMAIL` — TLS mode (set by `--domain`)
+- `EXAMPLES_*`, `<APP>_CLIENT_ID` — Example apps hosting + OAuth clients (provisioned by `setup.sh`)
+- `ACCOUNTS_SITE` / `SYNC_SITE` / `EXAMPLES_SITE` / `ACME_EMAIL` — TLS mode (set by `--domain`)
 
 See `.env.example` for all options.
 

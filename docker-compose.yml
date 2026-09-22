@@ -51,13 +51,13 @@ services:
       # Never set these to empty strings - Caddy treats that as a parse error.
       - ACCOUNTS_SITE=${ACCOUNTS_SITE:-:5377}
       - SYNC_SITE=${SYNC_SITE:-:5379}
-      - SAMPLES_SITE=${SAMPLES_SITE:-:5380}
+      - EXAMPLES_SITE=${EXAMPLES_SITE:-:5380}
       - ACME_EMAIL=${ACME_EMAIL:-admin@localhost}
     ports:
       - "${ACCOUNTS_PORT:-5377}:5377"
       - "${SYNC_PORT:-5379}:5379"
-      # Samples portal (localhost mode; dark in TLS mode like the ones above)
-      - "${SAMPLES_PORT:-5380}:5380"
+      # Examples portal (localhost mode; dark in TLS mode like the ones above)
+      - "${EXAMPLES_PORT:-5380}:5380"
       # TLS endpoints - nothing listens on these in localhost mode
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
@@ -76,20 +76,20 @@ services:
       retries: 5
 
   # ==========================================================================
-  # Samples - hosted example apps (single container, path-based)
+  # Examples - hosted example apps (single container, path-based)
   # ==========================================================================
   # Serves the launchpad portal at / and each example app at /<app>/.
   # Client IDs + accounts domain are injected at startup (see entrypoint);
   # setup.sh provisions the OAuth clients.
-  samples:
+  examples:
     image: ghcr.io/betterbasehq/betterbase-examples:latest
     restart: unless-stopped
     expose:
       - "8080"
     environment:
-      - SAMPLES_ACCOUNTS_DOMAIN=${SAMPLES_ACCOUNTS_DOMAIN:-localhost:5377}
+      - EXAMPLES_ACCOUNTS_DOMAIN=${EXAMPLES_ACCOUNTS_DOMAIN:-localhost:5377}
       # Space- or comma-separated; launchpad is always served at /
-      - ENABLED_APPS=${ENABLED_APPS:-tasks notes photos board chat passwords}
+      - EXAMPLES_ENABLED_APPS=${EXAMPLES_ENABLED_APPS:-tasks notes photos board chat passwords}
       - LAUNCHPAD_CLIENT_ID=${LAUNCHPAD_CLIENT_ID:-}
       - TASKS_CLIENT_ID=${TASKS_CLIENT_ID:-}
       - NOTES_CLIENT_ID=${NOTES_CLIENT_ID:-}
