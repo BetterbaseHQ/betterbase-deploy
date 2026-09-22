@@ -28,11 +28,13 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: ./setup.sh [--domain example.com] [--email you@example.com]"
             echo ""
             echo "Options:"
-            echo "  --domain    Production domain. Serves https://accounts.DOMAIN and"
-            echo "              https://sync.DOMAIN with automatic Let's Encrypt TLS."
-            echo "              Requires DNS A records for both subdomains pointing at"
-            echo "              this server, and ports 80+443 reachable. Defaults to"
-            echo "              localhost (plain HTTP on ports 5377/5379)."
+            echo "  --domain    Production domain. Serves https://accounts.DOMAIN,"
+            echo "              https://sync.DOMAIN, and https://samples.DOMAIN with"
+            echo "              automatic Let's Encrypt TLS."
+            echo "              Requires DNS A records for all three subdomains"
+            echo "              pointing at this server, and ports 80+443 reachable."
+            echo "              Defaults to localhost (plain HTTP on ports"
+            echo "              5377/5379/5380)."
             echo "  --email     Contact email for Let's Encrypt (expiry notices)."
             echo "              Defaults to admin@DOMAIN when --domain is given."
             exit 0
@@ -85,6 +87,7 @@ if [ ! -f .env ]; then
     # .env self-documenting. --domain rewrites these to real hostnames.
     printf 'ACCOUNTS_SITE=:5377\n' >> .env
     printf 'SYNC_SITE=:5379\n' >> .env
+    printf 'SAMPLES_SITE=:5380\n' >> .env
 
     echo "Generated IDENTITY_HASH_KEY, CAP_ADMIN_KEY, and database passwords."
 else
@@ -103,7 +106,7 @@ if [ -n "$DOMAIN" ]; then
     if [ -z "$ACME_EMAIL" ]; then
         ACME_EMAIL="admin@$DOMAIN"
     fi
-    if [[ ! "$ACME_EMAIL" =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]]; then
+    if [[ ! "$ACME_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]]; then
         echo "Error: Invalid email format: $ACME_EMAIL"
         exit 1
     fi
@@ -114,9 +117,13 @@ if [ -n "$DOMAIN" ]; then
     sed_inplace "/^ACCOUNTS_SITE=/d" .env
     sed_inplace "/^SYNC_SITE=/d" .env
     sed_inplace "/^ACME_EMAIL=/d" .env
+    sed_inplace "/^SAMPLES_SITE=/d" .env
+    sed_inplace "/^SAMPLES_ACCOUNTS_DOMAIN=/d" .env
     printf 'ACCOUNTS_SITE=accounts.%s\n' "$DOMAIN" >> .env
     printf 'SYNC_SITE=sync.%s\n' "$DOMAIN" >> .env
     printf 'ACME_EMAIL=%s\n' "$ACME_EMAIL" >> .env
+    printf 'SAMPLES_SITE=samples.%s\n' "$DOMAIN" >> .env
+    printf 'SAMPLES_ACCOUNTS_DOMAIN=accounts.%s\n' "$DOMAIN" >> .env
 fi
 
 # Source current .env values
@@ -132,10 +139,19 @@ set +a
 if [ -z "${OPAQUE_SERVER_SETUP:-}" ]; then
     echo ""
     echo "Generating OPAQUE server keys..."
-    # Digest-pinned to the multi-arch manifest of betterbase-accounts v0.1.2:
-    # this image generates the deployment's long-term trust root, so bump the
-    # pin deliberately with each accounts release.
-    KEYGEN_IMAGE="ghcr.io/betterbasehq/betterbase-accounts@sha256:38e0871c231793e74be806853c03fb25592fab27f9ee721e03490cbaf5330fe7"
+    # Same tag as the accounts service — keygen and server must agree on
+    # the OPAQUE format, so they share the image reference. First-party
+    # images track :latest for now; deliberate version pins once things
+    # stabilize.
+    KEYGEN_IMAGE="ghcr.io/betterbasehq/betterbase-accounts:latest"
+
+    # Pull so a stale local :latest can't silently generate keys with an
+    # older OPAQUE format than the server will run. If the pull fails we
+    # continue with the local image but say so loudly.
+    if ! docker pull -q "$KEYGEN_IMAGE" >/dev/null 2>&1; then
+        echo "Warning: could not pull $KEYGEN_IMAGE; using local image" >&2
+        docker image inspect "$KEYGEN_IMAGE" --format 'Warning: using {{.Id}}' >&2 || true
+    fi
 
     if ! OPAQUE_SERVER_SETUP=$(docker run --rm --entrypoint /app/keygen "$KEYGEN_IMAGE"); then
         echo "Error: OPAQUE keygen failed. Check Docker image availability." >&2
@@ -144,6 +160,13 @@ if [ -z "${OPAQUE_SERVER_SETUP:-}" ]; then
 
     if [ -z "$OPAQUE_SERVER_SETUP" ]; then
         echo "Error: OPAQUE keygen produced no output." >&2
+        exit 1
+    fi
+
+    # The value is written to .env, which is `source`d — keygen output is
+    # container output and must be a hex blob, nothing else.
+    if [[ ! "$OPAQUE_SERVER_SETUP" =~ ^[0-9a-fA-F]+$ ]]; then
+        echo "Error: keygen output is not a hex blob; refusing to save." >&2
         exit 1
     fi
 
@@ -230,6 +253,14 @@ if [ -z "${CAP_KEY_ID:-}" ] || [ -z "${CAP_SECRET:-}" ]; then
         -H "Content-Type: application/json" \
         -d '{"name":"betterbase-accounts"}') \
         || { echo "Error: CAP site key request failed." >&2; rm -f "$header_file"; exit 1; }
+
+    # End the admin session before tearing down — stopping the containers
+    # alone would leave the token valid in the persisted valkey volume.
+    docker compose run --rm --no-deps -T \
+        --entrypoint curl -v "$header_file:/tmp/auth_header:ro" accounts \
+        -sf --connect-timeout 5 --max-time 10 -X POST http://cap:3000/auth/logout \
+        -H "@/tmp/auth_header" >/dev/null 2>&1 || true
+
     rm -f "$header_file"
 
     CAP_KEY_ID=$(echo "$key_response" | jq -r '.siteKey')
@@ -255,6 +286,141 @@ else
 fi
 
 # ==========================================================================
+# Step 4: Provision OAuth clients for the sample apps
+# ==========================================================================
+
+# The samples container serves launchpad at / and each app at /<app>/.
+SAMPLES_APPS="launchpad tasks notes photos board chat passwords"
+
+# bash 3.2 (macOS) has no ${var^^}
+upper() {
+    echo "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+samples_clients_missing() {
+    local app var
+    for app in $SAMPLES_APPS; do
+        var="$(upper "$app")_CLIENT_ID"
+        if [ -z "${!var:-}" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+if samples_clients_missing; then
+    echo ""
+    echo "Provisioning OAuth clients for the sample apps..."
+
+    # Creating clients needs a live accounts service (which pulls in its DB
+    # and CAP). Started here and stopped again at the end of this step, so
+    # setup still leaves nothing running. Re-arm the cleanup trap so an
+    # interrupted provisioning also stops the accounts chain.
+    trap 'docker compose stop accounts accounts-db cap valkey >/dev/null 2>&1 || true' EXIT
+
+    echo "Starting accounts service..."
+    if ! docker compose up -d --wait accounts 2>/dev/null; then
+        echo "Error: accounts service did not become healthy." >&2
+        exit 1
+    fi
+
+    oauth_client() {
+        docker compose exec -T accounts /app/oauth-client "$@"
+    }
+
+    # "<client-id>\t<Redirect URIs line>" for an existing client name, via
+    # `oauth-client list` (rows print ID: before Name:, Redirect URIs after).
+    find_client() {
+        oauth_client list 2>/dev/null | awk -v n="$1" \
+            '$1 == "ID:" { id = $2 }
+             $1 == "Name:" && $2 == n { getline; print id "\t" $0 }' \
+            | head -1
+    }
+
+    # Public redirect base for the samples origin (follows SAMPLES_SITE,
+    # which --domain sets; ":5380" means localhost HTTP mode).
+    if [ -n "${SAMPLES_SITE:-}" ] && [[ "$SAMPLES_SITE" != :* ]]; then
+        REDIRECT_BASE="https://$SAMPLES_SITE"
+    else
+        REDIRECT_BASE="http://localhost:${SAMPLES_PORT:-5380}"
+    fi
+
+    for app in $SAMPLES_APPS; do
+        var="$(upper "$app")_CLIENT_ID"
+        if [ -n "${!var:-}" ]; then
+            echo "  $app: client already configured."
+            continue
+        fi
+
+        # Launchpad lives at the root; other apps at /<app>/.
+        if [ "$app" = "launchpad" ]; then
+            redirect_uri="$REDIRECT_BASE/"
+        else
+            redirect_uri="$REDIRECT_BASE/$app/"
+        fi
+
+        scope_args=()
+        case "$app" in
+            photos) scope_args=(--scope sync --scope files) ;;
+            launchpad) ;;
+            *) scope_args=(--scope sync) ;;
+        esac
+
+        # Reuse an existing client only while its registered redirect URIs
+        # still cover this deployment's origin (e.g. not after a localhost
+        # -> domain migration, where reusing would silently break OAuth).
+        existing="$(find_client "$app")"
+        client_id=""
+        if [ -n "$existing" ]; then
+            existing_id="$(printf '%s' "$existing" | cut -f1)"
+            if printf '%s' "$existing" | grep -q "\"$redirect_uri\""; then
+                client_id="$existing_id"
+                echo "  $app: reusing existing client."
+            else
+                echo "  $app: existing client has stale redirect URIs; creating a new one."
+            fi
+        fi
+
+        if [ -z "$client_id" ]; then
+            echo "Creating OAuth client for $app ($redirect_uri)..."
+            # "${arr[@]+"${arr[@]}"}" keeps empty arrays usable under set -u
+            # on bash 3.2 (macOS)
+            output=$(oauth_client create --name "$app" \
+                --redirect-uri "$redirect_uri" \
+                ${scope_args[@]+"${scope_args[@]}"} 2>&1) || true
+            client_id=$(echo "$output" | grep "^Client ID:" | awk '{print $3}')
+        fi
+
+        if [ -z "$client_id" ]; then
+            echo "Error: could not create or find OAuth client for $app." >&2
+            echo "$output" >&2
+            exit 1
+        fi
+
+        # The value is written to .env (which is `source`d) - only accept
+        # conservative identifier characters, as with the CAP keys above.
+        if [[ ! "$client_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            echo "Error: unexpected client ID format for $app; refusing to save." >&2
+            exit 1
+        fi
+
+        sed_inplace "/^$var=/d" .env
+        printf '%s=%s\n' "$var" "$client_id" >> .env
+        eval "$var=\$client_id"
+        echo "  $app: $client_id"
+    done
+
+    # Leave nothing running (mirrors the CAP step); `docker compose up -d`
+    # starts the full stack fresh.
+    echo "Stopping provisioning services..."
+    docker compose stop accounts accounts-db cap valkey >/dev/null 2>&1 || true
+
+    echo "Sample app OAuth clients configured."
+else
+    echo "Sample app OAuth clients already configured."
+fi
+
+# ==========================================================================
 # Done
 # ==========================================================================
 
@@ -271,7 +437,7 @@ echo "  OAUTH_ISSUER:  $OAUTH_ISSUER"
 echo "  SYNC_ENDPOINT: $SYNC_ENDPOINT"
 echo ""
 if [[ "$OAUTH_ISSUER" == *"localhost"* ]]; then
-    echo "  Using localhost defaults (plain HTTP on ports ${ACCOUNTS_PORT:-5377}/${SYNC_PORT:-5379})."
+    echo "  Using localhost defaults (plain HTTP on ports ${ACCOUNTS_PORT:-5377}/${SYNC_PORT:-5379}/${SAMPLES_PORT:-5380})."
     echo "  For production, re-run with:"
     echo "    ./setup.sh --domain yourdomain.com"
     echo ""
@@ -279,10 +445,17 @@ else
     echo "  TLS: Caddy will obtain Let's Encrypt certificates for"
     echo "    ${ACCOUNTS_SITE:-accounts.$DOMAIN}"
     echo "    ${SYNC_SITE:-sync.$DOMAIN}"
+    echo "    ${SAMPLES_SITE:-samples.$DOMAIN}"
     echo "  Before starting, make sure:"
-    echo "    - DNS A records for both subdomains point to this server"
+    echo "    - DNS A records for all three subdomains point to this server"
     echo "    - Ports 80 and 443 are reachable from the internet"
     echo ""
+    if [[ "${SMTP_DEV_MODE:-true}" != "false" ]]; then
+        echo "  Warning: SMTP_DEV_MODE is on — signup/verification emails are"
+        echo "  logged (docker compose logs accounts), not delivered. Set"
+        echo "  SMTP_DEV_MODE=false + SMTP_HOST for real email delivery."
+        echo ""
+    fi
 fi
 echo "To start Betterbase:"
 echo "  docker compose up -d"

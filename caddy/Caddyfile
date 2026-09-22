@@ -224,6 +224,25 @@
 }
 
 # ==============================================================================
+# Samples (hosted example apps)
+# ==============================================================================
+# Static app builds from the unified samples container, mounted path-based:
+# launchpad at / and each app at /<app>/. Same env-driven site address:
+# ":5380" for localhost HTTP, "samples.d.tld" for automatic HTTPS on 443.
+{$SAMPLES_SITE::5380} {
+	# Static assets and OAuth redirect traffic only — relaxed tier.
+	rate_limit {
+		zone samples_global {
+			key {remote_host}
+			events 1000
+			window 1m
+		}
+	}
+
+	reverse_proxy samples:8080
+}
+
+# ==============================================================================
 # betterbase-sync (Synchronization Service)
 # ==============================================================================
 # Same env-driven site address as above: ":5379" for localhost HTTP,
