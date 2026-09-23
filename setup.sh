@@ -236,32 +236,31 @@ if [ -z "${CAP_KEY_ID:-}" ] || [ -z "${CAP_SECRET:-}" ]; then
         exit 1
     fi
 
-    # Create bearer auth token (base64 encoded JSON). The header goes through
-    # a root-only temp file so the session token never appears in argv.
+    # Create bearer auth token (base64 encoded JSON). The header is piped to
+    # curl via stdin (-H @-) so the session token never appears in argv or on
+    # disk. (A root-owned temp file would seem safer, but the accounts
+    # container runs as uid 65532 and cannot read a 0600 root file — and curl
+    # silently drops an unreadable -H @file, sending the request unauthenticated.)
     auth_token=$(jq -n --arg t "$session_token" --arg h "$hashed_token" '{"token":$t,"hash":$h}' | base64 | tr -d '\n')
-    header_file=$(mktemp)
-    chmod 600 "$header_file"
-    printf 'Authorization: Bearer %s\n' "$auth_token" > "$header_file"
+    auth_header="Authorization: Bearer $auth_token"
 
-    # Create site key. curl runs inside the accounts container, so the header
-    # file has to be mounted in rather than referenced from the host.
+    # Create site key. curl runs inside the accounts container; the header
+    # arrives over stdin.
     echo "Creating CAP site key..."
-    key_response=$(docker compose run --rm --no-deps -T \
-        --entrypoint curl -v "$header_file:/tmp/auth_header:ro" accounts \
-        -sf --connect-timeout 5 --max-time 10 -X POST http://cap:3000/server/keys \
-        -H "@/tmp/auth_header" \
-        -H "Content-Type: application/json" \
-        -d '{"name":"betterbase-accounts"}') \
-        || { echo "Error: CAP site key request failed." >&2; rm -f "$header_file"; exit 1; }
+    key_response=$(printf '%s\n' "$auth_header" \
+        | docker compose run --rm --no-deps -T --entrypoint curl accounts \
+            -sf --connect-timeout 5 --max-time 10 -X POST http://cap:3000/server/keys \
+            -H @- \
+            -H "Content-Type: application/json" \
+            -d '{"name":"betterbase-accounts"}') \
+        || { echo "Error: CAP site key request failed." >&2; exit 1; }
 
     # End the admin session before tearing down — stopping the containers
     # alone would leave the token valid in the persisted valkey volume.
-    docker compose run --rm --no-deps -T \
-        --entrypoint curl -v "$header_file:/tmp/auth_header:ro" accounts \
-        -sf --connect-timeout 5 --max-time 10 -X POST http://cap:3000/auth/logout \
-        -H "@/tmp/auth_header" >/dev/null 2>&1 || true
-
-    rm -f "$header_file"
+    printf '%s\n' "$auth_header" \
+        | docker compose run --rm --no-deps -T --entrypoint curl accounts \
+            -sf --connect-timeout 5 --max-time 10 -X POST http://cap:3000/auth/logout \
+            -H @- >/dev/null 2>&1 || true
 
     CAP_KEY_ID=$(echo "$key_response" | jq -r '.siteKey')
     CAP_SECRET=$(echo "$key_response" | jq -r '.secretKey')
