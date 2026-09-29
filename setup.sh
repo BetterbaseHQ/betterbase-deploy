@@ -289,17 +289,18 @@ fi
 # ==========================================================================
 
 # The examples container serves launchpad at / and each app at /<app>/.
-EXAMPLES_APPS="launchpad tasks notes photos board chat passwords"
+EXAMPLES_APPS="launchpad tasks notes photos board chat passwords ai-chat"
 
-# bash 3.2 (macOS) has no ${var^^}
-upper() {
-    echo "$1" | tr '[:lower:]' '[:upper:]'
+# bash 3.2 (macOS) has no ${var^^}; hyphens become underscores in env names
+# (ai-chat → AI_CHAT_CLIENT_ID, matching the entrypoint's client_id() map)
+client_var() {
+    echo "${1}_CLIENT_ID" | tr '[:lower:]-' '[:upper:]_'
 }
 
 examples_clients_missing() {
     local app var
     for app in $EXAMPLES_APPS; do
-        var="$(upper "$app")_CLIENT_ID"
+        var="$(client_var "$app")"
         if [ -z "${!var:-}" ]; then
             return 0
         fi
@@ -345,7 +346,7 @@ if examples_clients_missing; then
     fi
 
     for app in $EXAMPLES_APPS; do
-        var="$(upper "$app")_CLIENT_ID"
+        var="$(client_var "$app")"
         if [ -n "${!var:-}" ]; then
             echo "  $app: client already configured."
             continue

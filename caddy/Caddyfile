@@ -5,10 +5,14 @@
 # for detailed threat models and rationale.
 #
 # Rate limit tiers (sliding window - allows natural bursting within window):
-#   - Strict:   60/min   - Login, registration, recovery
-#   - Moderate: 120/min  - Verification, OAuth
-#   - Standard: 300/min  - Authenticated API calls
-#   - Relaxed:  1000/min - Health checks, public keys, static assets
+#   - Strict:   60/min   - Login, registration, recovery, federation WS
+#   - Moderate: 120/min  - Verification, OAuth, client WS upgrades
+#   - Standard: 300/min  - Authenticated API calls, health/JWKS, files
+#   - Relaxed:  1000/min - accounts web UI/unmatched; 600/min - sync default
+#
+# Client sync is exclusively WebSocket RPC (/api/v1/ws) — HTTP tiers cover
+# connection upgrades only; per-message/per-connection abuse is bounded
+# server-side (mailbox connection caps, federation peer quotas).
 #
 # Philosophy: IP-based limits are a last resort for shared IPs (offices, universities).
 # Application-level user/email limits provide primary protection.
@@ -286,10 +290,14 @@
 	}
 
 	# -------------------------------------------------------------------------
-	# HEALTH CHECK (300/min per IP)
-	# Only unauthenticated endpoint - protect against DDoS
+	# HEALTH CHECK + JWKS (300/min per IP)
+	# Only unauthenticated endpoints - protect against DDoS. JWKS is fetched
+	# by accounts (JWT validation) and federation peers.
 	# -------------------------------------------------------------------------
-	@sync_health path /health
+	@sync_health {
+		path /health
+		path /.well-known/jwks.json
+	}
 	handle @sync_health {
 		rate_limit {
 			zone sync_health {
@@ -302,23 +310,25 @@
 	}
 
 	# -------------------------------------------------------------------------
-	# EVENTS (120/min per IP)
-	# Long-lived connections - application enforces per-user limits
+	# CLIENT WEBSOCKET RPC (120 connection upgrades/min per IP)
+	# /api/v1/ws — the only client sync path (subprotocol betterbase-rpc-v1).
+	# The HTTP rate limit covers *connection attempts*; per-message abuse on
+	# an established connection is bounded server-side: the sync broker caps
+	# connections per mailbox (max_connections_per_mailbox, default 3).
 	# -------------------------------------------------------------------------
-	@sync_events {
-		path /api/v1/events
-		method POST
+	@sync_ws {
+		path /api/v1/ws
 	}
-	handle @sync_events {
+	handle @sync_ws {
 		rate_limit {
-			zone sync_events {
+			zone sync_ws {
 				key {vars.client_ip}
 				events 120
 				window 1m
 			}
 		}
 		reverse_proxy sync:5379 {
-			# Long-lived connection settings
+			# Long-lived connection settings for the RPC stream
 			flush_interval -1
 			transport http {
 				read_timeout 24h
@@ -328,37 +338,46 @@
 	}
 
 	# -------------------------------------------------------------------------
-	# SYNC PUSH (300/min per IP)
-	# Write operations (POST /api/v1/spaces/{spaceID}/push)
+	# FEDERATION WEBSOCKET (60 connection upgrades/min per IP)
+	# /api/v1/federation/ws — server-to-server mailbox connections. Slow:
+	# peers hold a handful of persistent connections and reconnect on
+	# restart. Server-side per-peer quotas (FederationQuotaTracker) bound
+	# concurrent connections per peer domain.
 	# -------------------------------------------------------------------------
-	@sync_push {
-		path_regexp /api/v1/spaces/[^/]+/push
-		method POST
+	@sync_federation_ws {
+		path /api/v1/federation/ws
 	}
-	handle @sync_push {
+	handle @sync_federation_ws {
 		rate_limit {
-			zone sync_push {
+			zone sync_federation_ws {
 				key {vars.client_ip}
-				events 300
+				events 60
 				window 1m
 			}
 		}
-		reverse_proxy sync:5379
+		reverse_proxy sync:5379 {
+			flush_interval -1
+			transport http {
+				read_timeout 24h
+				write_timeout 30s
+			}
+		}
 	}
 
 	# -------------------------------------------------------------------------
-	# SYNC PULL (1000/min per IP)
-	# Read operations (POST /api/v1/pull)
+	# FEDERATION HTTP METADATA (300/min per IP)
+	# Peer trust/metadata endpoints queried during federation setup
+	# (trusted-keys listing, per-domain status)
 	# -------------------------------------------------------------------------
-	@sync_pull {
-		path /api/v1/pull
-		method POST
+	@sync_federation_http {
+		path /api/v1/federation/trusted
+		path_regexp /api/v1/federation/status/.*
 	}
-	handle @sync_pull {
+	handle @sync_federation_http {
 		rate_limit {
-			zone sync_pull {
+			zone sync_federation_http {
 				key {vars.client_ip}
-				events 1000
+				events 300
 				window 1m
 			}
 		}
