@@ -183,6 +183,13 @@ services:
       - TRUSTED_ISSUERS=${OAUTH_ISSUER:-http://localhost:5377}=http://accounts:5377/.well-known/jwks.json
       - AUDIENCES=betterbase-sync
       - IDENTITY_HASH_KEY=${IDENTITY_HASH_KEY}
+      # Blob/file storage (photos uploads, per-app attachments). Without
+      # this the files API routes stay unregistered and uploads 404.
+      # Filesystem backend on a named volume, matching dev/e2e parity.
+      - FILE_STORAGE=${FILE_STORAGE:-fs}
+      - FILE_FS_PATH=/var/lib/betterbase-sync/files
+    volumes:
+      - sync_files:/var/lib/betterbase-sync/files
     depends_on:
       accounts:
         condition: service_healthy
@@ -199,3 +206,4 @@ volumes:
   valkey_data:
   accounts_db_data:
   sync_db_data:
+  sync_files:
