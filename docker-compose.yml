@@ -89,13 +89,13 @@ services:
     environment:
       - EXAMPLES_ACCOUNTS_DOMAIN=${EXAMPLES_ACCOUNTS_DOMAIN:-localhost:5377}
       # Space- or comma-separated; launchpad is always served at /
-      - EXAMPLES_ENABLED_APPS=${EXAMPLES_ENABLED_APPS:-tasks notes photos board chat passwords ai-chat}
+      - EXAMPLES_ENABLED_APPS=${EXAMPLES_ENABLED_APPS:-tasks notes photos board messenger passwords ai-chat}
       - LAUNCHPAD_CLIENT_ID=${LAUNCHPAD_CLIENT_ID:-}
       - TASKS_CLIENT_ID=${TASKS_CLIENT_ID:-}
       - NOTES_CLIENT_ID=${NOTES_CLIENT_ID:-}
       - PHOTOS_CLIENT_ID=${PHOTOS_CLIENT_ID:-}
       - BOARD_CLIENT_ID=${BOARD_CLIENT_ID:-}
-      - CHAT_CLIENT_ID=${CHAT_CLIENT_ID:-}
+      - MESSENGER_CLIENT_ID=${MESSENGER_CLIENT_ID:-}
       - PASSWORDS_CLIENT_ID=${PASSWORDS_CLIENT_ID:-}
       - AI_CHAT_CLIENT_ID=${AI_CHAT_CLIENT_ID:-}
     healthcheck:
