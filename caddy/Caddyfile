@@ -106,11 +106,11 @@
 				window 1m
 			}
 		}
-		header Access-Control-Allow-Origin "*"
-		header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-		header Access-Control-Allow-Headers "Authorization, Content-Type"
-		header Access-Control-Max-Age "86400"
-		respond 204
+		# The app answers preflights itself: its CORS config is the single
+		# source of truth for the allowed-header list. Duplicating the list
+		# here once broke browser file uploads (x-record-id went missing
+		# from the copy and every cross-origin upload failed CORS).
+		reverse_proxy accounts:5377
 	}
 
 	# -------------------------------------------------------------------------
@@ -295,11 +295,11 @@
 				window 1m
 			}
 		}
-		header Access-Control-Allow-Origin "*"
-		header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-		header Access-Control-Allow-Headers "Authorization, Content-Type"
-		header Access-Control-Max-Age "86400"
-		respond 204
+		# The app answers preflights itself: its middleware is the single
+		# source of truth for the allowed-header list (incl. X-UCAN,
+		# X-Wrapped-DEK, X-Record-ID for the files API). Duplicating the
+		# list here once broke browser file uploads on prod.
+		reverse_proxy sync:5379
 	}
 
 	# -------------------------------------------------------------------------
