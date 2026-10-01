@@ -52,6 +52,7 @@ services:
       - ACCOUNTS_SITE=${ACCOUNTS_SITE:-:5377}
       - SYNC_SITE=${SYNC_SITE:-:5379}
       - EXAMPLES_SITE=${EXAMPLES_SITE:-:5380}
+      - APEX_SITE=${APEX_SITE:-:5390}
       - ACME_EMAIL=${ACME_EMAIL:-admin@localhost}
     ports:
       - "${ACCOUNTS_PORT:-5377}:5377"
@@ -64,6 +65,8 @@ services:
     volumes:
       # Config is mounted, not baked: edits apply after `docker compose restart caddy`
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Apex identity-anchor landing page (see Caddyfile "Apex" section)
+      - ./caddy/apex:/srv/apex:ro
     depends_on:
       accounts:
         condition: service_healthy

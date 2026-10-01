@@ -447,3 +447,68 @@
 		reverse_proxy sync:5379
 	}
 }
+
+# ==============================================================================
+# Apex (identity anchor): betterbase.dev
+# ==============================================================================
+# The identity domain serves discovery + webfinger + jwks, and a hello-world
+# landing page. Per the discovery protocol (betterbase-accounts README
+# "WebFinger and discovery"), a handle's domain must answer
+# /.well-known/betterbase; where the services actually live is advertised
+# inside that document. All three well-known routes PROXY to the accounts
+# server — it composes them from its config, so there is exactly one source
+# of truth. When OAUTH_ISSUER moves to the apex, the apex metadata becomes
+# authoritative with no hand-maintained JSON here.
+#
+# Site address from the environment (see docker-compose.yml):
+#   unset / ":5390"  -> localhost mode: plain HTTP, unpublished (harmless)
+#   "betterbase.dev" -> production: automatic HTTPS on 443 (ACME)
+{$APEX_SITE::5390} {
+	# Discovery endpoints — relaxed tier (public, cacheable, same as jwks
+	# on the other sites; fetched by browsers, accounts, future peers).
+	handle /.well-known/betterbase {
+		rate_limit {
+			zone apex_wellknown {
+				key {remote_host}
+				events 300
+				window 1m
+			}
+		}
+		reverse_proxy accounts:5377
+	}
+
+	handle /.well-known/webfinger {
+		rate_limit {
+			zone apex_wellknown {
+				key {remote_host}
+				events 300
+				window 1m
+			}
+		}
+		reverse_proxy accounts:5377
+	}
+
+	handle /.well-known/jwks.json {
+		rate_limit {
+			zone apex_wellknown {
+				key {remote_host}
+				events 300
+				window 1m
+			}
+		}
+		reverse_proxy accounts:5377
+	}
+
+	# Everything else: hello-world landing page (static, mounted read-only)
+	handle {
+		rate_limit {
+			zone apex_default {
+				key {remote_host}
+				events 300
+				window 1m
+			}
+		}
+		root * /srv/apex
+		file_server
+	}
+}
