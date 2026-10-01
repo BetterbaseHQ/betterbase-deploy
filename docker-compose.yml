@@ -134,6 +134,9 @@ services:
     environment:
       - OPAQUE_SERVER_SETUP=${OPAQUE_SERVER_SETUP}
       - OAUTH_ISSUER=${OAUTH_ISSUER:-http://localhost:5377}
+      # Where the API/UI are served when different from the issuer (identity
+      # anchor). Unset = issuer-hosted (the common case).
+      - ACCOUNTS_PUBLIC_URL=${ACCOUNTS_PUBLIC_URL:-}
       - DATABASE_URL=postgres://${ACCOUNTS_DB_USER:-accounts}:${ACCOUNTS_DB_PASSWORD:-accounts}@accounts-db:5432/${ACCOUNTS_DB_NAME:-accounts}?sslmode=disable
       - CAP_VERIFY_URL=http://cap:3000
       - CAP_KEY_ID=${CAP_KEY_ID}
