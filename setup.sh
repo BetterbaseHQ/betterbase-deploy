@@ -244,15 +244,20 @@ if [ -z "${CAP_KEY_ID:-}" ] || [ -z "${CAP_SECRET:-}" ]; then
     auth_token=$(jq -n --arg t "$session_token" --arg h "$hashed_token" '{"token":$t,"hash":$h}' | base64 | tr -d '\n')
     auth_header="Authorization: Bearer $auth_token"
 
-    # Create site key. curl runs inside the accounts container; the header
-    # arrives over stdin.
+    # Create site key with the full feature set: instrumentation challenges
+    # (browser-environment verification alongside the PoW) plus automated-
+    # browser blocking. See https://trycap.dev/guide/instrumentation.html.
+    # HashWX (GPU-resistant PoW) is not yet in a stable release; revisit on
+    # the next bump. blockNonBrowserUA stays off — setup fetches challenges
+    # with curl. obfuscationLevel is not a create-body field (server default
+    # is already 3); the enforcement PUT below pins it explicitly.
     echo "Creating CAP site key..."
     key_response=$(printf '%s\n' "$auth_header" \
         | docker compose run --rm --no-deps -T --entrypoint curl accounts \
             -sf --connect-timeout 5 --max-time 10 -X POST http://cap:3000/server/keys \
             -H @- \
             -H "Content-Type: application/json" \
-            -d '{"name":"betterbase-accounts"}') \
+            -d '{"name":"betterbase-accounts","instrumentation":true,"blockAutomatedBrowsers":true}') \
         || { echo "Error: CAP site key request failed." >&2; exit 1; }
 
     # End the admin session before tearing down — stopping the containers

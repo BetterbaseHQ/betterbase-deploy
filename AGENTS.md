@@ -12,7 +12,7 @@ Production self-hosting deployment for the Betterbase platform. Pulls prebuilt s
 | `accounts` | `ghcr.io/betterbasehq/betterbase-accounts:latest` | OPAQUE + OAuth 2.0, port 5377 (internal) |
 | `sync` | `ghcr.io/betterbasehq/betterbase-sync:latest` | Encrypted blob sync, port 5379 (internal) |
 | `examples` | `ghcr.io/betterbasehq/betterbase-examples:latest` | Hosted example apps, port 8080 (internal); launchpad at `/`, apps at `/<app>/` |
-| `cap` | `tiago2/cap` (digest-pinned) | Proof-of-work CAPTCHA; upstream has no version tags, so bumps are deliberate |
+| `cap` | `tiago2/cap` (version-pinned) | Proof-of-work CAPTCHA with instrumentation challenges; bumps are deliberate after checking upstream releases |
 | `valkey` | `valkey/valkey:9-alpine` | Redis-compatible backing store for CAP |
 | `accounts-db`, `sync-db` | `postgres:18-alpine` | One database per service |
 
@@ -42,7 +42,7 @@ The Caddyfile is bind-mounted into the container (never baked into the image): a
 - Keep `docker-compose.yml` service definitions in sync with the production base in `betterbase-dev/docker-compose.yml` — especially the CAP digest pin, healthchecks (accounts/sync use `curl`, caddy/examples use busybox `wget`), and env var names, which must match what the services actually read (see each service repo's `AGENTS.md`).
 - The examples image (`betterbase-examples` repo) serves all example apps path-based from one container: launchpad at `/`, apps at `/<app>/`. Deployment-specific config (accounts domain, OAuth client IDs, enabled apps) is injected at container start by its entrypoint (`config.js` + script-tag injection) — the image itself is deployment-agnostic. `setup.sh` must keep the redirect URIs it registers in sync with the examples origin (`EXAMPLES_SITE` in TLS mode, `http://localhost:${EXAMPLES_PORT}` otherwise). setup.sh targets bash 3.2 (macOS): no `${var^^}`, and empty arrays need `${arr[@]+"${arr[@]}"}` under `set -u`.
 - The Caddyfile is mirrored from `betterbase-dev/caddy/Caddyfile`; rate-limit tiers are documented there and in each service's `docs/RATE-LIMITING.md`. Site addresses are env-driven (`{$ACCOUNTS_SITE::5377}` / `{$SYNC_SITE::5379}` / `{$EXAMPLES_SITE::5380}`): unset or `:PORT` serves plain HTTP on that port; a hostname serves automatic HTTPS on 443 with ACME. Compose must never pass these as empty strings — Caddy's default only applies when the variable is unset, and an empty site address is a parse error. `setup.sh --domain` writes `ACCOUNTS_SITE`/`SYNC_SITE`/`EXAMPLES_SITE`/`EXAMPLES_ACCOUNTS_DOMAIN`/`ACME_EMAIL` into `.env`.
-- Image tags: our own GHCR images track `:latest` — including the keygen image in `setup.sh`, which shares the accounts tag so keygen and server always agree on the OPAQUE format. Deliberate version pins come once things stabilize. Third-party images must be version-pinned at minimum, and digest-pinned when only a floating tag exists (see `cap`).
+- Image tags: our own GHCR images track `:latest` — including the keygen image in `setup.sh`, which shares the accounts tag so keygen and server always agree on the OPAQUE format. Deliberate version pins come once things stabilize. Third-party images must be version-pinned at minimum, and digest-pinned when only a floating tag exists.
 - Service images are published for `linux/amd64` and `linux/arm64`; on Apple Silicon run `--platform linux/arm64` explicitly if you see the amd64-emulation warning (stale local images predate the multi-arch builds).
 
 ## Verification

@@ -3,10 +3,10 @@ services:
   # CAP - Proof-of-Work CAPTCHA
   # ==========================================================================
   cap:
-    # Digest-pinned: upstream publishes only a floating :latest tag, and a
-    # silent update is what introduced the Redis requirement. Bump
-    # deliberately after checking https://github.com/tiagozip/cap releases.
-    image: tiago2/cap@sha256:c29417b6270d1fddc6a0603c08d972f89a12de81889d09c3f97a0915422fba5e
+    # Version-pinned (digest-pinning predates upstream publishing version
+    # tags). Bump deliberately after checking
+    # https://github.com/tiagozip/cap releases.
+    image: tiago2/cap:3.1.11
     restart: unless-stopped
     expose:
       - "3000"
